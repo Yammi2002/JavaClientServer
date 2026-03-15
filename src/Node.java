@@ -3,7 +3,17 @@ import java.net.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Rappresenta un nodo in un sistema distribuito che comunica via Multicast.
+ * Si connette a un server via TCP per la sincronizzazione (START/SHUTDOWN).
+ * * @author Yammi2002
+ * @version 1.0
+ */
 public class Node {
+    /**
+     * Punto di ingresso principale per il Nodo.
+     * @param args da riga di comando: ID del nodo e numero totale di nodi.
+     */
     public static void main(String[] args) {
         if (args.length < 2) {
             System.out.println("Uso: java Node <ID> <NUM_NODI>");
@@ -12,8 +22,9 @@ public class Node {
 
         int mioID = Integer.parseInt(args[0]);
         int numNodiTotal = Integer.parseInt(args[1]);
-        float LP = 0.2f; // 20% probabilità di perdita
+        float LP = 0.2f; 
         
+        // Mappa thread-safe per memorizzare i messaggi inviati (per recupero perdite)
         Map<Integer, String> miaCronologia = new ConcurrentHashMap<>();
 
         try (Socket tcpSocket = new Socket("127.0.0.1", 5000)) {
@@ -38,11 +49,9 @@ public class Node {
                 tReceiver.start();
                 tSender.start();
 
-                // Aspetta che il proprio Sender finisca l'invio
                 tSender.join();
                 System.out.println("Nodo " + mioID + ": Invio completato. Verifico ricezione dagli altri...");
 
-                // AFFIDABILITÀ TOTALE: Aspetta finché non ha ricevuto tutto (fino al 100) da tutti
                 while (!receiverLogic.tuttoRicevuto()) {
                     Thread.sleep(500);
                 }
@@ -62,7 +71,9 @@ public class Node {
     }
 }
 
-// --- LOGICA DI INVIO ---
+/**
+ * Gestisce l'invio di messaggi multicast con una probabilità di perdita simulata.
+ */
 class Sender implements Runnable {
     private int mioID;
     private MulticastSocket socket;
@@ -70,12 +81,22 @@ class Sender implements Runnable {
     private float lp;
     private Map<Integer, String> history;
 
+    /**
+     * Costruttore del modulo Sender.
+     * @param id Identificativo univoco del nodo.
+     * @param s Socket multicast esistente.
+     * @param g Indirizzo del gruppo multicast.
+     * @param lp Loss Probability (probabilità di perdita pacchetti).
+     * @param h Mappa della cronologia messaggi per gestire richieste di rispedizione.
+     */
     Sender(int id, MulticastSocket s, InetAddress g, float lp, Map<Integer, String> h) {
         this.mioID = id; this.socket = s; this.group = g; this.lp = lp; this.history = h;
     }
 
+    /**
+     * Ciclo principale: invia 100 messaggi e gestisce la probabilità di perdita.
+     */
     public void run() {
-        // Invio i 100 messaggi standard
         for (int i = 1; i <= 100; i++) {
             String msg = "DATA:" + mioID + ":" + i;
             history.put(i, msg);
@@ -88,13 +109,17 @@ class Sender implements Runnable {
             try { Thread.sleep(100); } catch (InterruptedException e) {}
         }
 
-        // Segnale di chiusura (ID 101) per aiutare gli altri a rilevare gap finali
+        // Invia pacchetto di chiusura per segnalare la fine delle trasmissioni
         for (int j = 0; j < 5; j++) {
             invia("DATA:" + mioID + ":101");
             try { Thread.sleep(200); } catch (InterruptedException e) {}
         }
     }
 
+    /**
+     * Invia un pacchetto datagramma sul gruppo multicast.
+     * @param testo Il contenuto testuale del messaggio.
+     */
     private void invia(String testo) {
         try {
             byte[] buf = testo.getBytes();
@@ -103,7 +128,9 @@ class Sender implements Runnable {
     }
 }
 
-// --- LOGICA DI RICEZIONE E RECUPERO ---
+/**
+ * Gestisce la ricezione dei messaggi multicast e il recupero dei pacchetti persi.
+ */
 class Receiver implements Runnable {
     private int mioID;
     private MulticastSocket socket;
@@ -111,13 +138,24 @@ class Receiver implements Runnable {
     private int[] nextExpected;
     private Map<Integer, String> history;
 
+    /**
+     * Costruttore del modulo Receiver.
+     * @param id Identificativo del nodo.
+     * @param s Socket multicast.
+     * @param g Indirizzo del gruppo.
+     * @param total Numero totale di nodi nella rete.
+     * @param h Cronologia locale per rispondere a richieste LOST di altri nodi.
+     */
     Receiver(int id, MulticastSocket s, InetAddress g, int total, Map<Integer, String> h) {
         this.mioID = id; this.socket = s; this.group = g; this.history = h;
         this.nextExpected = new int[total + 1];
         Arrays.fill(nextExpected, 1);
     }
 
-    // Metodo usato dal Main per sapere quando interrompere l'attesa
+    /**
+     * Verifica se sono stati ricevuti tutti i messaggi attesi da tutti i nodi.
+     * @return true se non mancano messaggi, false altrimenti.
+     */
     public boolean tuttoRicevuto() {
         for (int i = 1; i < nextExpected.length; i++) {
             if (i != mioID && nextExpected[i] <= 100) return false;
@@ -125,6 +163,9 @@ class Receiver implements Runnable {
         return true;
     }
 
+    /**
+     * Ascolta continuamente sul socket multicast e gestisce protocolli DATA e LOST.
+     */
     public void run() {
         byte[] buf = new byte[1024];
         while (true) {
@@ -142,9 +183,9 @@ class Receiver implements Runnable {
                     if (idMsg == nextExpected[idMitt]) {
                         nextExpected[idMitt]++;
                     } else if (idMsg > nextExpected[idMitt]) {
-                        // Rilevato buco: chiedo i messaggi mancanti
+                        // Rilevato un salto: richiede i messaggi mancanti
                         for (int m = nextExpected[idMitt]; m < idMsg; m++) {
-                            if (m <= 100) { // Chiedo solo se è un messaggio reale
+                            if (m <= 100) {
                                 System.out.println("GAP! Chiedo a Nodo " + idMitt + " msg " + m);
                                 invia("LOST:" + idMitt + ":" + m);
                             }
@@ -155,6 +196,7 @@ class Receiver implements Runnable {
                 else if (parti[0].equals("LOST")) {
                     int idSmarrito = Integer.parseInt(parti[1]);
                     int msgSmarrito = Integer.parseInt(parti[2]);
+                    // Se il messaggio perso è mio, lo rispedisco
                     if (idSmarrito == mioID && history.containsKey(msgSmarrito)) {
                         invia(history.get(msgSmarrito));
                     }
@@ -163,6 +205,10 @@ class Receiver implements Runnable {
         }
     }
 
+    /**
+     * Invia un pacchetto di risposta o richiesta sul gruppo multicast.
+     * @param testo Messaggio da inviare.
+     */
     private void invia(String testo) {
         try {
             byte[] b = testo.getBytes();
