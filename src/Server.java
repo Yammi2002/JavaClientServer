@@ -11,7 +11,7 @@ public class Server {
     /**
      * Avvia il server, attende la connessione di tutti i nodi e coordina l'esecuzione.
      */
-    public static void main() {
+    public static void main(String[] args) {
         int porta = 5000;
         int numeroNodiAttesi = 3; 
         List<Socket> listaNodi = new ArrayList<>();
